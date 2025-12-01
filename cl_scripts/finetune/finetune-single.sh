@@ -15,7 +15,7 @@ python train.py data-bin/$DATASET \
     --eval-bleu-detok moses --eval-bleu-remove-bpe \
     --best-checkpoint-metric bleu \
     --maximize-best-checkpoint-metric \
-    --max-epoch 100 \
+    --max-epoch 1 \
     --patience 5 \
     --validate-interval 999 --save-interval 999 \
     --validate-interval-updates 1000 --keep-interval-updates 1 \

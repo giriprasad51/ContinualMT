@@ -1,8 +1,13 @@
-DEVICE=$1
-MAX_TEMP=$2
-MASK_LAMBDA=$3
-SPARSITY=$4
-SEQ_ID=$5
+DEVICE=1
+MAX_TEMP=2
+MASK_LAMBDA=3
+SPARSITY=4
+SEQ_ID=0
+
+Out="/hdd2/giri/ContinualMT/logs/run_$(date +%Y-%m-%d_%H-%M-%S).out"
+Err="/hdd2/giri/ContinualMT/logs/run_$(date +%Y-%m-%d_%H-%M-%S).err"
+
+echo $(date +%Y-%m-%d_%H-%M-%S)
 # min temperature should be 1 / max temperature
 MIN_TEMP=$(echo "scale=4; 1.0 / $MAX_TEMP" | bc)
 
@@ -13,7 +18,7 @@ CKPT_DIR=checkpoints/transformer-fmalloc-${MAX_TEMP}-${MASK_LAMBDA}-${SPARSITY}-
 rm -rf $CKPT_DIR
 mkdir -p $CKPT_DIR
 
-PT_MODEL_DIR=pretrained_models/wmt19.de-en.joined-dict.ensemble/model1.pt
+PT_MODEL_DIR=pretrained_models/wmt19.de-en.joined-dict.ensemble/model4.pt
 IMPORTANCE_DIR=checkpoints/transformer-ffn-importance/importance.pt
 
 TASKID=1
@@ -58,7 +63,8 @@ do
         --hat-temperature $MIN_TEMP --hat-temperature-max $MAX_TEMP \
         --hat-temperature-min $MIN_TEMP \
         --hat-anneal-steps 1000 \
-        --sparsity $SPARSITY 
+        --sparsity $SPARSITY \
+        --source-lang de --target-lang en
     
     
     TASKID=$((TASKID+1))

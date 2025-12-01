@@ -1,6 +1,6 @@
-DEVICE=$1
-SEQ_ID=$2
-lambda=$3
+DEVICE=1
+SEQ_ID=2
+lambda=3
 
 export CUDA_VISIBLE_DEVICES=$DEVICE
 
@@ -37,7 +37,7 @@ do
         --eval-bleu --eval-bleu-args "{\"beam\": 5, \"max_len_a\": 1.2, \"max_len_b\": 10}" \
         --eval-bleu-detok moses --eval-bleu-remove-bpe \
         --best-checkpoint-metric bleu --maximize-best-checkpoint-metric \
-        --max-epoch 100 \
+        --max-epoch 1 \
         --no-epoch-checkpoints \
         --no-save-optimizer-state \
         --patience 10 \

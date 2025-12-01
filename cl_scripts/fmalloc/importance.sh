@@ -1,4 +1,4 @@
-DEVICE=$1
+DEVICE=1
 
 export CUDA_VISIBLE_DEVICES=$DEVICE
 
@@ -10,7 +10,7 @@ PRETRAINED_MODEL_DIR=pretrained_models/wmt19.de-en.joined-dict.ensemble/model1.p
 
 DATASET=wmt17_de_en
 
-python fairseq_cli/compute_hat_importance.py data-bin/$DATASET \
+python fairseq_cli/compute_hat_importance.py /hdd2/giri/ContinualMT/data-bin/$DATASET \
     --train-subset train \
     --task translation \
     --user-dir approaches \
