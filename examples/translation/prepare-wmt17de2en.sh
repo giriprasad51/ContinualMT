@@ -12,7 +12,7 @@ TOKENIZER=$SCRIPTS/tokenizer/tokenizer.perl
 CLEAN=$SCRIPTS/training/clean-corpus-n.perl
 NORM_PUNC=$SCRIPTS/tokenizer/normalize-punctuation.perl
 REM_NON_PRINT_CHAR=$SCRIPTS/tokenizer/remove-non-printing-char.perl
-FASTBPE=fastBPE
+FASTBPE=../../fastBPE
 BPECODES=../..pretrained_models/wmt19.de-en.joined-dict.ensemble/bpecodes
 VOCAB=../..pretrained_models/wmt19.de-en.joined-dict.ensemble/dict.en.txt
 
@@ -38,7 +38,7 @@ CORPORA=(
 
 # This will make the dataset compatible to the one used in "Convolutional Sequence to Sequence Learning"
 # https://arxiv.org/abs/1705.03122
-if [ "$1" == "--icml17" ]; then
+if [ "1" == "--icml17" ]; then
     URLS[2]="http://statmt.org/wmt14/training-parallel-nc-v9.tgz"
     FILES[2]="training-parallel-nc-v9.tgz"
     CORPORA[2]="training/news-commentary-v9.de-en"

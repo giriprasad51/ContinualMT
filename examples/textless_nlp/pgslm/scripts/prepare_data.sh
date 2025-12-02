@@ -6,14 +6,14 @@
 
 set -eu
 
-train_json=$1
-valid_json=$2
-test_json=$3
-n_units=$4
-hop_size=$5
-sr=$6
-f0_quantizer=$7
-out_dir=$8
+train_json=1
+valid_json=2
+test_json=3
+n_units=4
+hop_size=5
+sr=6
+f0_quantizer=7
+out_dir=8
 
 meta_path="$out_dir/data_config.json"
 f0_dir="$out_dir/f0"

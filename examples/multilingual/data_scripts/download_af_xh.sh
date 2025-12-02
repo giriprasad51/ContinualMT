@@ -31,10 +31,10 @@ mkdir -p $DEST
 mkdir -p $UTILS
 
 function download_opus(){
-    src=$1
-    tgt=$2
-    subset=$3
-    ulr=$4
+    src=1
+    tgt=2
+    subset=3
+    ulr=4
 
     mkdir extract_$subset.$src-$tgt
     pushd extract_$subset.$src-$tgt
@@ -50,9 +50,9 @@ function download_opus(){
 }
 
 function concat_subsets(){
-    src=$1
-    tgt=$2
-    subsets=$3
+    src=1
+    tgt=2
+    subsets=3
     src_train=raw_train.$src-$tgt.$src
     tgt_train=raw_train.$src-$tgt.$tgt
     > $src_train
@@ -67,14 +67,14 @@ function concat_subsets(){
 
 function get_seeded_random()
 {
-  seed="$1"
+  seed="1"
   openssl enc -aes-256-ctr -pass pass:"$seed" -nosalt \
     </dev/zero 2>/dev/null
 }
 
 function split_train_valid(){
-    src=$1
-    tgt=$2
+    src=1
+    tgt=2
     raw_src_train=raw_train.$src-$tgt.$src
     raw_tgt_train=raw_train.$src-$tgt.$tgt
 
@@ -89,8 +89,8 @@ function split_train_valid(){
 }
 
 function copy2dst(){
-    lsrc=$1
-    ltgt=$2
+    lsrc=1
+    ltgt=2
     src=${lsrc:0:2}
     tgt=${ltgt:0:2}
  
