@@ -12,6 +12,9 @@ import torch
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import OmegaConf, open_dict
 
+import sys
+sys.path.append("/hdd2/giri/ContinualMT")
+
 from fairseq import distributed_utils, metrics
 from fairseq.dataclass.configs import FairseqConfig
 from fairseq.dataclass.initialize import add_defaults, hydra_init

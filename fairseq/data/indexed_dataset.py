@@ -510,9 +510,12 @@ class MMapIndexedDataset(torch.utils.data.Dataset):
         self._bin_buffer = memoryview(self._bin_buffer_mmap)
 
     def __del__(self):
-        self._bin_buffer_mmap._mmap.close()
-        del self._bin_buffer_mmap
-        del self._index
+        try:
+            self._bin_buffer_mmap._mmap.close()
+            del self._bin_buffer_mmap
+            del self._index
+        except:
+            pass
 
     def __len__(self):
         return len(self._index)

@@ -27,6 +27,9 @@ import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
 
+import sys
+sys.path.append("/hdd2/giri/ContinualMT")
+
 from fairseq import checkpoint_utils, options, quantization_utils, tasks, utils
 from fairseq.data import data_utils, iterators
 from fairseq.data.plasma_utils import PlasmaStore

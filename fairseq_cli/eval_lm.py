@@ -18,6 +18,9 @@ from typing import Iterable, List, Optional
 import torch
 from omegaconf import DictConfig
 
+import sys
+sys.path.append("/hdd2/giri/ContinualMT")
+
 import fairseq
 from fairseq import checkpoint_utils, distributed_utils, options, tasks, utils
 from fairseq.dataclass.utils import convert_namespace_to_omegaconf

@@ -26,13 +26,15 @@ logger = logging.getLogger("fairseq_cli.train")
 import numpy as np
 import torch
 from omegaconf import DictConfig, OmegaConf
+import sys
+sys.path.append("/hdd2/giri/ContinualMT")
 
 from fairseq import checkpoint_utils, options, quantization_utils, tasks, utils
 from fairseq.data import data_utils, iterators
 from fairseq.data.plasma_utils import PlasmaStore
 from fairseq.dataclass.configs import FairseqConfig
 from fairseq.dataclass.initialize import add_defaults
-from fairseq.dataclass.utils import convert_namespace_to_omegaconf
+from fairseq.dataclass.utils import convert_namespace_to_omegaconf 
 from fairseq.distributed import fsdp_enable_wrap, fsdp_wrap
 from fairseq.distributed import utils as distributed_utils
 from fairseq.file_io import PathManager
@@ -87,7 +89,7 @@ def main(cfg: FairseqConfig) -> None:
     task = tasks.setup_task(cfg.task)
 
     assert cfg.criterion, "Please specify criterion to train a model"
-
+    print("---------------------check- point -1---------", cfg.model)
     # Build model and criterion
     if cfg.distributed_training.ddp_backend == "fully_sharded":
         with fsdp_enable_wrap(cfg.distributed_training):

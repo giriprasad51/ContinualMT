@@ -19,6 +19,9 @@ import numpy as np
 import torch
 from omegaconf import DictConfig
 
+import sys
+sys.path.append("/hdd2/giri/ContinualMT")
+
 from fairseq import checkpoint_utils, options, scoring, tasks, utils
 from fairseq.dataclass.utils import convert_namespace_to_omegaconf
 from fairseq.logging import progress_bar
@@ -103,6 +106,8 @@ def _main(cfg: DictConfig, output_file):
     )
 
     # loading the dataset should happen after the checkpoint has been loaded so we can give it the saved task config
+    print("---------------check-point-1----gen---------------------")
+    print(cfg.dataset.gen_subset,saved_cfg.task)
     task.load_dataset(cfg.dataset.gen_subset, task_cfg=saved_cfg.task)
 
     if cfg.generation.lm_path is not None:

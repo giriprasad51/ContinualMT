@@ -15,6 +15,9 @@ import typing as tp
 from argparse import Namespace
 from itertools import zip_longest
 
+import sys
+sys.path.append("/hdd2/giri/ContinualMT")
+
 from fairseq import options, tasks, utils
 from fairseq.binarizer import (
     AlignmentDatasetBinarizer,

@@ -11,6 +11,9 @@ import argparse
 import os
 import sys
 
+import sys
+sys.path.append("/hdd2/giri/ContinualMT")
+
 from fairseq.data import dictionary
 from fairseq.scoring import bleu
 
