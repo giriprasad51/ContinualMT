@@ -4,8 +4,8 @@
 
 # Usage: bash prepare-domadap.sh medical
 
-DATADIR=/hdd2/giri/ContinualMT/opus_data/subtitles
-HOME=examples/translation
+DATADIR=/hdd2/giri/ContinualMT/data-bin1/wmt17_de_en
+
 if [ -z $HOME ]
 then
   echo "HOME var is empty, please set it"
@@ -17,8 +17,8 @@ CLEAN=$SCRIPTS/training/clean-corpus-n.perl
 NORM_PUNC=$SCRIPTS/tokenizer/normalize-punctuation.perl
 REM_NON_PRINT_CHAR=$SCRIPTS/tokenizer/remove-non-printing-char.perl
 FASTBPE=/hdd2/giri/ContinualMT/fastBPE
-BPECODES=../../pretrained_models/wmt19.de-en.joined-dict.ensemble/bpecodes
-VOCAB=../../pretrained_models/wmt19.de-en.joined-dict.ensemble/dict.en.txt
+BPECODES=/hdd2/giri/ContinualMT/pretrained_models/wmt19.de-en.joined-dict.ensemble/bpecodes
+VOCAB=/hdd2/giri/ContinualMT/pretrained_models/wmt19.de-en.joined-dict.ensemble/dict.en.txt
 
 src=de
 tgt=en
@@ -49,20 +49,20 @@ $FASTBPE/fast applybpe ${DATADIR}/train.bpe.en ${DATADIR}/train.tok.en $BPECODES
 
 perl $CLEAN -ratio 1.5 ${DATADIR}/train.bpe de en ${DATADIR}/train.bpe.filtered 1 250
 
-echo "pre-processing test data..."
-for l in $src $tgt; do
-    if [ "$l" == "$src" ]; then
-        t="src"
-    else
-        t="ref"
-    fi
-    grep '<seg id' ${DATADIR}/test/newstest2021-deen-$t.$l.sgm | \
-        sed -e 's/<seg id="[0-9]*">\s*//g' | \
-        sed -e 's/\s*<\/seg>\s*//g' | \
-        sed -e "s/\’/\'/g" > ${DATADIR}/test.$l
+# echo "pre-processing test data..."
+# for l in $src $tgt; do
+#     if [ "$l" == "$src" ]; then
+#         t="src"
+#     else
+#         t="ref"
+#     fi
+#     grep '<seg id' ${DATADIR}/test/newstest2021-deen-$t.$l.sgm | \
+#         sed -e 's/<seg id="[0-9]*">\s*//g' | \
+#         sed -e 's/\s*<\/seg>\s*//g' | \
+#         sed -e "s/\’/\'/g" > ${DATADIR}/test.$l
 
-    echo ""
-done
+#     echo ""
+# done
 
 for split in dev test
 do

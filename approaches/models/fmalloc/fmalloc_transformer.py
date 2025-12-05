@@ -195,8 +195,8 @@ class FMALLOCTransformerModel(TransformerModel):
             pretrained_state_dict = state['model']
             print("-----------check-point-ft-------------------")
             print(cfg.pretrained_transformer_path)
-            print(model)
-            # model.load_state_dict(pretrained_state_dict, strict=False)
+            # print(state)
+            model.load_state_dict(pretrained_state_dict, strict=False)
             print("Load pretrained model from {}".format(cfg.pretrained_transformer_path))
 
         if cfg.enable_hat:

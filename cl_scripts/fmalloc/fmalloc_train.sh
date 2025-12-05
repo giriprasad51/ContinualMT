@@ -1,11 +1,10 @@
 DEVICE=1
 MAX_TEMP=2
 MASK_LAMBDA=3
-SPARSITY=4
-SEQ_ID=0
+SPARSITY=0.2
+SEQ_ID=4
 
-Out="/hdd2/giri/ContinualMT/logs/run_$(date +%Y-%m-%d_%H-%M-%S).out"
-Err="/hdd2/giri/ContinualMT/logs/run_$(date +%Y-%m-%d_%H-%M-%S).err"
+
 
 echo $(date +%Y-%m-%d_%H-%M-%S)
 # min temperature should be 1 / max temperature
@@ -13,17 +12,17 @@ MIN_TEMP=$(echo "scale=4; 1.0 / $MAX_TEMP" | bc)
 
 export CUDA_VISIBLE_DEVICES=$DEVICE
 
-CKPT_DIR=checkpoints/transformer-fmalloc-${MAX_TEMP}-${MASK_LAMBDA}-${SPARSITY}-seq-${SEQ_ID}
+CKPT_DIR=/hdd2/giri/ContinualMT/checkpoints/transformer-fmalloc-${MAX_TEMP}-${MASK_LAMBDA}-${SPARSITY}-seq-${SEQ_ID}
 
-rm -rf $CKPT_DIR
+# rm -rf $CKPT_DIR
 mkdir -p $CKPT_DIR
 
-PT_MODEL_DIR=pretrained_models/wmt19.de-en.joined-dict.ensemble/model4.pt
+PT_MODEL_DIR=pretrained_models/wmt19.de-en.joined-dict.ensemble/model1.pt
 IMPORTANCE_DIR=checkpoints/transformer-ffn-importance/importance.pt
 
 TASKID=1
 # read task sequence from /task_sequence/seq_${SEQ_ID}.txt
-TASK_SEQ=$(cat task_sequence/seq_${SEQ_ID}.txt)
+TASK_SEQ=$(cat task_sequence/seq_${SEQ_ID}.txt) 
 # enumerate all datasets it koran law medical
 for DATASET in $TASK_SEQ
 do
@@ -64,9 +63,9 @@ do
         --hat-temperature-min $MIN_TEMP \
         --hat-anneal-steps 1000 \
         --sparsity $SPARSITY \
-        --source-lang de --target-lang en
-    
-    
+        --source-lang de --target-lang en\
+        --max-epoch 1
+
     TASKID=$((TASKID+1))
 
     # test on previous datasets
@@ -85,7 +84,8 @@ do
             --quiet \
             --beam 5 --remove-bpe \
             --max-len-b 10 --max-len-a 1.2 \
-            --model-overrides "{'hat_task_id': $PREV_TASKID, 'hat_temperature':$MAX_TEMP}"
+            --model-overrides "{'hat_task_id': $PREV_TASKID, 'hat_temperature':$MAX_TEMP}" \
+            --source-lang de --target-lang en
 
         PREV_TASKID=$((PREV_TASKID+1))
     done

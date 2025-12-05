@@ -7,14 +7,14 @@ git clone https://github.com/moses-smt/mosesdecoder.git
 echo 'Cloning Subword NMT repository (for BPE pre-processing)...'
 git clone https://github.com/rsennrich/subword-nmt.git
 
-SCRIPTS=mosesdecoder/scripts
+SCRIPTS=/hdd2/giri/ContinualMT/mosesdecoder/scripts
 TOKENIZER=$SCRIPTS/tokenizer/tokenizer.perl
 CLEAN=$SCRIPTS/training/clean-corpus-n.perl
 NORM_PUNC=$SCRIPTS/tokenizer/normalize-punctuation.perl
 REM_NON_PRINT_CHAR=$SCRIPTS/tokenizer/remove-non-printing-char.perl
-FASTBPE=../../fastBPE
-BPECODES=../..pretrained_models/wmt19.de-en.joined-dict.ensemble/bpecodes
-VOCAB=../..pretrained_models/wmt19.de-en.joined-dict.ensemble/dict.en.txt
+FASTBPE=/hdd2/giri/ContinualMT/fastBPE
+BPECODES=/hdd2/giri/ContinualMT/pretrained_models/wmt19.de-en.joined-dict.ensemble/bpecodes
+VOCAB=/hdd2/giri/ContinualMT/pretrained_models/wmt19.de-en.joined-dict.ensemble/dict.en.txt
 
 URLS=(
     "http://statmt.org/wmt13/training-parallel-europarl-v7.tgz"
@@ -44,7 +44,7 @@ if [ "1" == "--icml17" ]; then
     CORPORA[2]="training/news-commentary-v9.de-en"
     OUTDIR=wmt14_en_de
 else
-    OUTDIR=wmt17_en_de
+    OUTDIR=/hdd2/giri/ContinualMT/data-bin/wmt17_en_de
 fi
 
 if [ ! -d "$SCRIPTS" ]; then
@@ -136,5 +136,5 @@ perl $CLEAN -ratio 1.5 $tmp/bpe.train $src $tgt $prep/train 1 250
 perl $CLEAN -ratio 1.5 $tmp/bpe.valid $src $tgt $prep/valid 1 250
 
 for L in $src $tgt; do
-    cp $tmp/bpe.test.$L $prep/test.$L
+    cp $tmp/bpe.test.$L $prep/test.$L 
 done

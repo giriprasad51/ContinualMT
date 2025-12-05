@@ -4,8 +4,8 @@
 
 # Usage: bash prepare-domadap.sh medical
 
-DATADIR=$1
-HOME=examples/translation
+DATADIR=1
+HOME=/hdd2/giri/ContinualMT
 if [ -z $HOME ]
 then
   echo "HOME var is empty, please set it"
