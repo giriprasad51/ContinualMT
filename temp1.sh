@@ -31,5 +31,43 @@ python ../../fairseq_cli/preprocess.py     --source-lang de     --target-lang en
 bash cl_scripts/fmalloc/fmalloc_train.sh > /hdd2/giri/ContinualMT/logs/run_$(date +%Y-%m-%d_%H-%M-%S).out 2> /hdd2/giri/ContinualMT/logs/run_$(date +%Y-%m-%d_%H-%M-%S).err
 
 
+#!/bin/bash
+
+# Create directories
+mkdir -p wmt19_de_en wmt20_de_en wmt21_de_en
+
+# Download test sets (easiest to get)
+echo "Downloading test sets..."
+
+# WMT19
+sacrebleu -t wmt17 -l de-en --echo src > wmt17_de_en/train.de
+sacrebleu -t wmt17 -l de-en --echo ref > wmt17_de_en/train.en
+
+# WMT20
+sacrebleu -t wmt20 -l de-en --echo src > wmt20_de_en/train.de
+sacrebleu -t wmt20 -l de-en --echo ref > wmt20_de_en/train.en
+
+# WMT21
+sacrebleu -t wmt21 -l de-en --echo src > wmt21_de_en/train.de
+sacrebleu -t wmt21 -l de-en --echo ref > wmt21_de_en/train.en
 
 
+# Create directory
+mkdir -p wmt17_de_en
+
+# Training data (WMT17 training corpus)
+sacrebleu -t wmt17 -l de-en --echo src > wmt17_de_en/train.de
+sacrebleu -t wmt17 -l de-en --echo ref > wmt17_de_en/train.en
+
+# Validation data (WMT16 test set)
+sacrebleu -t wmt16 -l de-en --echo src > wmt17_de_en/valid.de
+sacrebleu -t wmt16 -l de-en --echo ref > wmt17_de_en/valid.en
+
+# Test data (WMT17 test set)
+sacrebleu -t wmt17 -l de-en --echo src > wmt17_de_en/test.de
+sacrebleu -t wmt17 -l de-en --echo ref > wmt17_de_en/test.en
+
+echo "Test sets downloaded. For training data, you may need to:"
+echo "1. Check the ContinualMT repository for their preprocessed data"
+echo "2. Download from official WMT websites and preprocess yourself"
+echo "3. Use Hugging Face datasets for easier access"

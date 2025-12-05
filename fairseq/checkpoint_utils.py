@@ -493,7 +493,7 @@ def load_model_ensemble_and_task(
 
         # build model for ensemble
         ensemble.append(model)
-    return ensemble, cfg, task
+    return ensemble, cfg, task 
 
 
 def load_model_ensemble_and_task_from_hf_hub(

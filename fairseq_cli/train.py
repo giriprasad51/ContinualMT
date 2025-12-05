@@ -89,7 +89,7 @@ def main(cfg: FairseqConfig) -> None:
     task = tasks.setup_task(cfg.task)
 
     assert cfg.criterion, "Please specify criterion to train a model"
-    print("---------------------check- point -1---------", cfg.model)
+    print("---------------------check-point-1---------", cfg.model)
     # Build model and criterion
     if cfg.distributed_training.ddp_backend == "fully_sharded":
         with fsdp_enable_wrap(cfg.distributed_training):
