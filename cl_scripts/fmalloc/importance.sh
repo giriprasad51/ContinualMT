@@ -27,4 +27,9 @@ python fairseq_cli/compute_hat_importance.py /hdd2/giri/ContinualMT/data-bin/$DA
     --skip-invalid-size-inputs-valid-test \
     --pretrained-transformer-path $PRETRAINED_MODEL_DIR \
     --calculate-ffn-importance \
-    --source-lang de --target-lang en
+    --source-lang de --target-lang en \
+    --encoder-embed-dim 1024 \
+    --decoder-embed-dim 1024 \
+    --encoder-ffn-embed-dim 8192 \
+    --decoder-ffn-embed-dim 4096 \
+

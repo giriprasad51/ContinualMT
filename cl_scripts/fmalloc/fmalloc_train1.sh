@@ -1,28 +1,24 @@
-DEVICE=0,1,2,3
-MAX_TEMP=400
-MASK_LAMBDA=3
-SPARSITY=0.2
-SEQ_ID=0
-
-
-
-echo $(date +%Y-%m-%d_%H-%M-%S)
+DEVICE=$1
+MAX_TEMP=$2
+MASK_LAMBDA=$3
+SPARSITY=$4
+SEQ_ID=$5
 # min temperature should be 1 / max temperature
 MIN_TEMP=$(echo "scale=4; 1.0 / $MAX_TEMP" | bc)
 
 export CUDA_VISIBLE_DEVICES=$DEVICE
 
-CKPT_DIR=/hdd2/giri/ContinualMT/checkpoints/transformer-fmalloc-${MAX_TEMP}-${MASK_LAMBDA}-${SPARSITY}-seq-${SEQ_ID}
+CKPT_DIR=checkpoints/transformer-fmalloc-${MAX_TEMP}-${MASK_LAMBDA}-${SPARSITY}-seq-${SEQ_ID}
 
 rm -rf $CKPT_DIR
 mkdir -p $CKPT_DIR
 
-PT_MODEL_DIR=/hdd2/giri/ContinualMT/pretrained_models/wmt19.de-en.joined-dict.ensemble/model1.pt
+PT_MODEL_DIR=pretrained_models/wmt19.de-en.joined-dict.ensemble/model1.pt
 IMPORTANCE_DIR=checkpoints/transformer-ffn-importance/importance.pt
 
 TASKID=1
 # read task sequence from /task_sequence/seq_${SEQ_ID}.txt
-TASK_SEQ=$(cat task_sequence/seq_${SEQ_ID}.txt) 
+TASK_SEQ=$(cat task_sequence/seq_${SEQ_ID}.txt)
 # enumerate all datasets it koran law medical
 for DATASET in $TASK_SEQ
 do
@@ -46,7 +42,7 @@ do
         --warmup-updates 4000 \
         --patience 5 \
         --validate-interval 999 --save-interval 999 \
-        --validate-interval-updates 1000 --keep-interval-updates 1000 \
+        --validate-interval-updates 1000 --keep-interval-updates 1 \
         --save-interval-updates 1000 \
         --no-epoch-checkpoints \
         --no-last-checkpoints \
@@ -62,15 +58,9 @@ do
         --hat-temperature $MIN_TEMP --hat-temperature-max $MAX_TEMP \
         --hat-temperature-min $MIN_TEMP \
         --hat-anneal-steps 1000 \
-        --sparsity $SPARSITY \
-        --source-lang de --target-lang en\
-        --encoder-embed-dim 1024 \
-        --decoder-embed-dim 1024 \
-        --encoder-ffn-embed-dim 8192 \
-        --decoder-ffn-embed-dim 4096 \
-        # --max-epoch 1
-
-
+        --sparsity $SPARSITY 
+    
+    
     TASKID=$((TASKID+1))
 
     # test on previous datasets
@@ -89,10 +79,7 @@ do
             --quiet \
             --beam 5 --remove-bpe \
             --max-len-b 10 --max-len-a 1.2 \
-            --model-overrides "{'hat_task_id': $PREV_TASKID, 'hat_temperature':$MAX_TEMP}" \
-            --source-lang de --target-lang en \
-            --encoder-ffn-embed-dim 8192 \
-            --decoder-ffn-embed-dim 4096 \
+            --model-overrides "{'hat_task_id': $PREV_TASKID, 'hat_temperature':$MAX_TEMP}"
 
         PREV_TASKID=$((PREV_TASKID+1))
     done

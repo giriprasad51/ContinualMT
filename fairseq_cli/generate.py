@@ -106,8 +106,8 @@ def _main(cfg: DictConfig, output_file):
     )
 
     # loading the dataset should happen after the checkpoint has been loaded so we can give it the saved task config
-    print("---------------check-point-1----gen---------------------")
-    print(cfg.dataset.gen_subset,saved_cfg.task)
+    # print("---------------check-point-1----gen---------------------")
+    # print(cfg.dataset.gen_subset,saved_cfg.task)
     task.load_dataset(cfg.dataset.gen_subset, task_cfg=saved_cfg.task)
 
     if cfg.generation.lm_path is not None:

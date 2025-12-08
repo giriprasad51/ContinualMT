@@ -57,6 +57,10 @@ class FMALLOCTransformerEncoder(TransformerEncoderBase):
         layer = FMALLOCTransformerEncoderLayer(
             cfg, return_fc=self.return_fc
         )
+        # print("-----------check-point-encoder-------------------")
+        # print(layer)
+        # print(cfg)
+        # print(self.return_fc)
         checkpoint = cfg.checkpoint_activations
         if checkpoint:
             offload_to_cpu = cfg.offload_activations
@@ -114,6 +118,9 @@ class FMALLOCTransformerDecoder(TransformerDecoderBase):
 
     def build_decoder_layer(self, cfg, no_encoder_attn=False):
         layer = FMALLOCTransformerDecoderLayer(cfg, no_encoder_attn)
+        # print("-----------check-point-decoder-------------------")
+        # print(layer)
+        # print(cfg)
         checkpoint = cfg.checkpoint_activations
         if checkpoint:
             offload_to_cpu = cfg.offload_activations
@@ -178,6 +185,57 @@ class FMALLOCTransformerModel(TransformerModel):
             parser, FMALLOCTransformerConfig(), delete_default=True, with_prefix=""
         )
 
+    # @classmethod
+    # def build_model(cls, args, task):
+    #     """Build a new model instance."""
+
+    #     # cfg must be a FMALLOCTransformerConfig instance
+    #     cfg = FMALLOCTransformerConfig.from_namespace(args)
+
+    #     model = super().build_model(cfg, task)
+    #     print(model)
+        
+
+    #     # load pretrained model
+    #     if not os.path.exists(cfg.pretrained_transformer_path):
+    #         print("Pretrained model not found: {}".format(cfg.pretrained_transformer_path))
+    #     else:
+    #         model = TransformerModel.from_pretrained(
+    #             model_name_or_path='/hdd2/giri/ContinualMT/pretrained_models/wmt19.de-en.joined-dict.ensemble',
+    #             checkpoint_file='/hdd2/giri/ContinualMT/pretrained_models/wmt19.de-en.joined-dict.ensemble/model1.pt',
+    #             data_name_or_path='/hdd2/giri/ContinualMT/pretrained_models/wmt19.de-en.joined-dict.ensemble/',
+    #             bpe='fastbpe',
+    #             bpe_codes='/hdd2/giri/ContinualMT/pretrained_models/wmt19.de-en.joined-dict.ensemble/bpecodes',
+    #         )
+    #         print("Load pretrained model from {}".format(cfg.pretrained_transformer_path))
+    #         print(model)
+
+    #     if cfg.enable_hat:
+    #         # freeze pretrained model
+    #         for name, param in model.named_parameters():
+    #             if 'fc1' in name or 'fc2.weight' in name:
+    #                 continue
+    #             if 'task_embedding' in name:
+    #                 continue
+    #             param.requires_grad = False
+
+    #         # load general domain mask
+    #         if not os.path.exists(cfg.general_domain_mask_path):
+    #             print("General domain mask not found: {}".format(cfg.general_domain_mask_path))
+    #         else:
+
+    #             mask = torch.load(cfg.general_domain_mask_path)
+    #             task_num = cfg.hat.task_num
+    #             for key in mask.keys():
+    #                 name = key.replace('ffn_mask', 'ffn_hat.task_embedding.weight')                    
+    #                 quantile = mask[key].flatten().quantile(cfg.sparsity) 
+    #                 model.state_dict()[name][0] = (mask[key] > quantile) + (-1) * (mask[key] <= quantile)
+    #                 model.state_dict()[name][0] = model.state_dict()[name][0].to(torch.float) * cfg.hat.thres_emb
+    #                 for i in range(1, model.state_dict()[name].shape[0]):
+    #                     model.state_dict()[name][i] += (mask[key] > quantile) * cfg.hat.thres_emb
+
+    #     return model
+
     @classmethod
     def build_model(cls, args, task):
         """Build a new model instance."""
@@ -193,9 +251,9 @@ class FMALLOCTransformerModel(TransformerModel):
         else:
             state = checkpoint_utils.load_checkpoint_to_cpu(cfg.pretrained_transformer_path)
             pretrained_state_dict = state['model']
-            print("-----------check-point-ft-------------------")
-            print(cfg.pretrained_transformer_path)
-            # print(state)
+            # print("-----------check-point-ft-------------------")
+            # print(cfg.pretrained_transformer_path)
+            # print(model)
             model.load_state_dict(pretrained_state_dict, strict=False)
             print("Load pretrained model from {}".format(cfg.pretrained_transformer_path))
 
