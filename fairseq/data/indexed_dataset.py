@@ -490,8 +490,8 @@ class MMapIndexedDataset(torch.utils.data.Dataset):
         self._path = None
         self._index = None
         self._bin_buffer = None
-        print("----------check-point-indexed_dataset------------------")
-        print(path)
+        # print("----------check-point-indexed_dataset------------------")
+        # print(path)
         self._do_init(path)
 
     def __getstate__(self):
