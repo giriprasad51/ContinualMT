@@ -17,7 +17,7 @@ CKPT_DIR=/hdd2/giri/ContinualMT/checkpoints/transformer-fmalloc-${MAX_TEMP}-${MA
 rm -rf $CKPT_DIR
 mkdir -p $CKPT_DIR
 
-PT_MODEL_DIR=/hdd2/giri/ContinualMT/pretrained_models/wmt19.de-en.joined-dict.ensemble/model1.pt
+PT_MODEL_DIR=/hdd2/giri/ContinualMT/pretrained_models/wmt19.de-en.joined-dict.ensemble/model2.pt
 IMPORTANCE_DIR=checkpoints/transformer-ffn-importance/importance.pt
 
 TASKID=1

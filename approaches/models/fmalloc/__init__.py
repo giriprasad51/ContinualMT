@@ -52,6 +52,6 @@ def transformer_wmt_en_de_big_t2t(args):
 
 @register_model_architecture("fmalloc_transformer", "fmalloc@transformer_wmt19_de_en")
 def transformer_wmt19_de_en(args):
-    transformer_legacy.transformer_wmt_en_de(args)
+    transformer_legacy.transformer_wmt19_de_en(args)
 
 
