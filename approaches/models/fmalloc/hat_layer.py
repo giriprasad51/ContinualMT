@@ -3,10 +3,18 @@ from typing import Dict, List, Optional
 import torch
 import torch.nn as nn
 from torch import Tensor
+import torch.nn.functional as F
 from scipy.stats import norm
-from math import sqrt
-from fairseq.modules import GradMultiply    
+from math import sqrt, pi
+from fairseq.modules import GradMultiply
 
+import math
+from typing import Optional, Tuple
+from dataclasses import dataclass
+
+from itertools import combinations, product
+
+aux_info = {}
 class HATLayer(nn.Module):
     """HAT Layer block.
 
@@ -84,6 +92,7 @@ class HATLayer(nn.Module):
         mask = self.mask(temperature=self.cfg.hat.temperature, task_id=task_id)
         #print(mask)
         x = x * mask
+        # x = GradMultiply.apply(x, mask)
 
         return x
 
@@ -105,6 +114,332 @@ def negative_embedding(num_embeddings, embedding_dim):
         m.weight.data[idx] = torch.abs(m.weight.data[idx]) * -1
         
     return m
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class SVDMaskLinear(nn.Module):
+    def __init__(
+        self,
+        linear: nn.Linear,
+        rank: int = None,
+        device=None
+    ):
+        
+        super().__init__()
+
+        self.in_features = linear.in_features
+        self.out_features = linear.out_features
+        self.bias = linear.bias
+        self.weight = linear.weight
+        self.rank = rank
+        self.layer = linear
+        
+        self.device = device or linear.weight.device
+
+        # store original weight
+        self.register_buffer("W", linear.weight.detach().clone())
+
+        # buffers for SVD
+        self.register_buffer("U", None)
+        self.register_buffer("S", None)
+        self.register_buffer("Vt", None)
+
+        self.compute_svd()
+
+    def compute_svd(self):
+        """Compute SVD of the weight matrix"""
+        with torch.no_grad():
+            U, S, Vt = torch.linalg.svd(self.W, full_matrices=True)
+            self.U = U
+            self.S = S
+            self.Vt = Vt
+            # print(U.shape, S.shape, Vt.shape)
+
+    def scale_sorted_chunk_inplace(self, S, scales=None):
+    
+        # Sort indices only (values not needed)
+        _, ind = torch.sort(S)
+        ind = torch.arange(S.shape[0], device=S.device)
+        S_scaled = S
+        # Chunk indices
+        chunks = torch.chunk(ind, len(scales))
+        for i in range(len(scales)):
+            # print(S_scaled.shape,chunks[i].shape )
+            # Scale selected chunk IN-PLACE
+            S_scaled[chunks[i]] *= scales[i]
+        return S_scaled
+
+    
+
+    def reconstructed_weight(self, S=None, scales=None):
+        """Reconstruct masked weight"""
+        if scales!=None:
+            S = self.scale_sorted_chunk_inplace(self.S, scales=scales)
+        m,n = self.W.shape
+        Sigma = torch.zeros((m, n), device=self.W.device, dtype=self.W.dtype)
+        Sigma[:min(m, n), :min(m, n)] = torch.diag(S)
+        return self.U @ Sigma @ self.Vt
+
+    def forward(self, x, scales):
+        # print(self.S.shape, scales.shape)
+        S = self.scale_sorted_chunk_inplace(self.S, scales=scales)
+        W_rec = self.reconstructed_weight(S)
+        self.layer.weight.data = W_rec
+        return self.layer(x)
+
+def generate_ncr_gpu(n, r, lamda=1.0, device="cpu"):
+    
+    # Generate all combinations of positions for zeros
+    zero_positions_list = list(combinations(range(n), r))
+    num_combinations = len(zero_positions_list)
+    
+    # Initialize tensor with ones (scaled by lamda)
+    S1_tensor = torch.full((num_combinations, n), 1.0, device=device, dtype=torch.float32)
+    
+    # Set zeros in the appropriate positions
+    for idx, zero_positions in enumerate(zero_positions_list):
+        S1_tensor[idx, list(zero_positions)] = lamda
+    
+    return S1_tensor
+
+
+
+class SparsityAwareRouter(nn.Module):
+    """
+    Sparsity-aware routing mechanism that selects experts based on 
+    predicted activation sparsity rather than just performance.
+    
+    Key innovation: Routes to experts with highest expected sparsity
+    using Gaussian approximation of pre-activations.
+    """
+    def __init__(self, in_features: int, n_experts: int, top_k: int, comb):
+        super().__init__()
+        self.n_experts = n_experts
+        self.top_k = top_k
+        self.in_features = in_features
+        self.comb = comb
+        
+    def compute_expert_statistics(self, x: torch.Tensor, W=None, bias=None) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Compute μ_h and σ_h for each expert without full forward pass.
+        
+        Uses column-wise statistics of encoder weights to estimate
+        the mean and std of pre-activations.
+        
+        Args:
+            expert: ReLUExpert module
+            x: Input [batch_size, seq_len, in_features]
+        Returns:
+            mu_h: Mean of pre-activations [batch_size, seq_len]
+            sigma_h: Std of pre-activations [batch_size, seq_len]
+        """
+        
+        # Column-wise mean and variance of encoder weights
+        mu_weights = W.mean(dim=0)  # [in_features]
+        var_weights = W.var(dim=0, unbiased=False)  # [in_features]
+        
+        # Compute μ_h = μ^T x + b_mean
+        # print(x.shape, mu_weights.shape,bias.mean().shape)
+        mu_h = torch.matmul(x, mu_weights) + bias.mean()  # [batch, seq_len]
+        
+        # Compute σ_h = sqrt(σ^T (x^2))
+        x_squared = x ** 2
+        sigma_h_squared = torch.matmul(x_squared, var_weights)
+        sigma_h = torch.sqrt(sigma_h_squared + 1e-8)  # [batch, seq_len]
+        
+        return mu_h, sigma_h
+    
+    def forward(self, x: torch.Tensor, expert: nn.ModuleList, 
+                training: bool = True) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Route inputs to top-k sparsest experts.
+        
+        Args:
+            x: Input [batch_size, seq_len, in_features]
+            experts: List of ReLUExpert modules
+            training: Whether in training mode
+        Returns:
+            router_weights: Gating weights [batch_size, seq_len, n_experts]
+            router_logits: Raw routing scores [batch_size, seq_len, n_experts]
+        """
+        batch_size, seq_len, _ = x.shape
+        
+        # Compute sparsity scores for each expert
+        sparsity_scores = []
+        for S in self.comb:
+            W = expert.reconstructed_weight(scales=S)
+            mu_h, sigma_h = self.compute_expert_statistics(x,W,expert.bias)
+            
+            # Approximate Φ(μ_h / σ_h) using erf
+            # Lower score = sparser activation (fewer positive values)
+            z_score = mu_h / (math.sqrt(2) * sigma_h)
+            phi_score = torch.erf(z_score)  # Approximates CDF
+            
+            # We want to minimize Φ, so use negative
+            sparsity_scores.append(phi_score)
+
+        # print(sparsity_scores)
+        
+        # Stack scores: [batch_size, seq_len, n_experts]
+        router_logits = torch.stack(sparsity_scores, dim=-1)
+        
+        # Apply top-k routing
+        top_k_logits, top_k_indices = torch.topk(router_logits, self.top_k, dim=-1)
+        
+        # Apply softmax to top-k
+        router_weights = torch.zeros_like(router_logits)
+        router_weights.scatter_(-1, top_k_indices, F.softmax(top_k_logits, dim=-1))
+        # print(router_weights.shape, router_logits)
+        
+        return router_weights, router_logits
+
+
+class MoEXLayer(nn.Module):
+    """
+    MoE-X layer combining ReLU experts with sparsity-aware routing.
+    
+    This layer acts as a wide, sparse MLP by:
+    1. Using multiple ReLU experts for sparse activations
+    2. Routing via sparsity prediction
+    3. Combining expert outputs with learned weights
+    """
+    def __init__(self, expert: nn.ModuleList, top_k: int, n=8, r=2, lamda=1.0):
+        super().__init__()
+
+
+        self.expert = expert
+        self.top_k = top_k
+        self.comb = generate_ncr_gpu(n, r, lamda=lamda, device="cpu")
+        self.n_experts = len(self.comb)
+
+        self.in_features = expert.in_features
+        # global self.load_balancing
+        self.load_balancing = {}
+        self.router = SparsityAwareRouter(
+            in_features=self.in_features,
+            n_experts=self.n_experts,
+            top_k=top_k,
+            comb=self.comb
+        )
+        
+    def compute_load_balance_loss(self, router_probs: torch.Tensor) -> torch.Tensor:
+        """
+        Compute auxiliary loss to encourage balanced expert usage.
+        
+        Args:
+            router_probs: [batch_size, seq_len, n_experts]
+        Returns:
+            load_balance_loss: Scalar tensor
+        """
+        # Average probability of routing to each expert
+        expert_usage = router_probs.mean(dim=[0, 1])  # [n_experts]
+        
+        # We want uniform distribution (1/n_experts for each)
+        target = 1.0 / self.n_experts
+        
+        # MSE loss
+        load_balance_loss = ((expert_usage - target) ** 2).sum()
+        
+        return load_balance_loss
+    
+    def forward(
+        self,
+        x: torch.Tensor,
+        return_aux: bool = True
+    ) -> Tuple[torch.Tensor, Optional[dict]]:
+        """
+        Args:
+            x: [batch, seq, in_features]
+        Returns:
+            output: [batch, seq, in_features]
+            aux_info: routing diagnostics
+        """
+
+        B, S, D = x.shape
+
+        # ---------- Routing ----------
+        router_weights, router_logits = self.router(
+            x, self.expert, self.training
+        )
+
+        # top-k per token
+        topk_vals, topk_idx = torch.topk(
+            router_logits, self.top_k, dim=-1
+        )
+        topk_weights = F.softmax(topk_vals, dim=-1)
+
+        # ---------- Prepare flattened views ----------
+        x_flat = x.view(-1, D)                       # [B*S, D]
+        output = torch.zeros(
+            *x.shape[:-1],
+            self.expert.W.shape[0],
+            device=x.device,
+            dtype=x.dtype
+        )
+        output_flat = output.view(-1, self.expert.W.shape[0])
+
+        topk_idx_flat = topk_idx.view(-1, self.top_k)
+        topk_w_flat = topk_weights.view(-1, self.top_k)
+
+        expert_activations = [None] * self.n_experts
+        active_experts = []
+        # print(router_logits.shape,topk_vals.shape)
+        # print(topk_idx_flat)
+        # ---------- Token → Expert Dispatch ----------
+        global aux_info
+        self.load_balancing =  aux_info.get("load_balancing", {})
+        # print(aux_info.get("load_balancing", {}))
+        for expert_id in range(self.n_experts):
+            mask = topk_idx_flat == expert_id        # [B*S, K]
+            # print("----------",expert_id,mask)
+            if not mask.any():
+                continue
+
+            active_experts.append(expert_id)
+
+            token_ids, k_ids = mask.nonzero(as_tuple=True)
+
+            tokens = x_flat[token_ids]               # [N, D]
+            weights = topk_w_flat[token_ids, k_ids].unsqueeze(-1)
+            
+            # print(expert_id,  token_ids)
+            if expert_id  in self.load_balancing:
+                self.load_balancing[expert_id] += len(token_ids)
+            else:
+                self.load_balancing[expert_id] = len(token_ids)
+            # expert forward ONLY on routed tokens
+            expert_out = self.expert(tokens.unsqueeze(1), self.comb[expert_id])
+            expert_out = expert_out.squeeze(1)
+            # print(weights.shape, expert_out.shape, output.shape, output_flat.shape)
+            # weighted accumulation
+            output_flat.index_add_(
+                0, token_ids, expert_out * weights
+            )
+
+           
+
+        # ---------- Auxiliary Info ----------
+        # print("-----------MOE-X------------------")
+        
+        if return_aux:
+            load_balance_loss = self.compute_load_balance_loss(router_weights)
+
+           
+
+            aux_info = {
+                "router_weights": router_weights,
+                "router_logits": router_logits,
+                "load_balance_loss": aux_info.get("load_balance_loss", 0.0)+load_balance_loss,
+                "active_experts": torch.tensor(active_experts, device=x.device),
+                "load_balancing": self.load_balancing,
+                # "load_balancing": {k: load_balancing.get(k, 0) + aux_info.get("load_balancing", {}).get(k, 0) for k in load_balancing.keys() | aux_info.get("load_balancing", {}).keys()}
+            }
+
+        return output#, aux_info
+
+
 
 if __name__ == "__main__":
     from approaches.models.hat.hat_transformer_ffn_config import HATTransformerConfig
