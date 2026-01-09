@@ -1,5 +1,5 @@
 from typing import Dict, List, Optional
-
+import os
 import torch
 import torch.nn as nn
 from torch import Tensor
@@ -13,6 +13,7 @@ from typing import Optional, Tuple
 from dataclasses import dataclass
 
 from itertools import combinations, product
+import torch.distributed as dist
 
 aux_info = {}
 class HATLayer(nn.Module):
@@ -51,7 +52,7 @@ class HATLayer(nn.Module):
 
         embedding = self.task_embedding(torch.LongTensor([task_id]).to(device))
 
-        if self.training:
+        if self.is_training:
             mask = self.activation_gate(temperature*embedding)
         else:
             mask = self.activation_gate(self.cfg.hat.temperature_max*embedding)
@@ -115,95 +116,76 @@ def negative_embedding(num_embeddings, embedding_dim):
         
     return m
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+
 
 class SVDMaskLinear(nn.Module):
     def __init__(
         self,
         linear: nn.Linear,
         rank: int = None,
-        device=None
+        device=None,
     ):
         
         super().__init__()
 
         self.in_features = linear.in_features
         self.out_features = linear.out_features
-        self.bias = linear.bias
-        self.weight = linear.weight
         self.rank = rank
         self.layer = linear
-        
         self.device = device or linear.weight.device
-
-        # store original weight
-        self.register_buffer("W", linear.weight.detach().clone())
-
-        # buffers for SVD
-        self.register_buffer("U", None)
-        self.register_buffer("S", None)
-        self.register_buffer("Vt", None)
-
         self.compute_svd()
+
+    
 
     def compute_svd(self):
         """Compute SVD of the weight matrix"""
         with torch.no_grad():
-            U, S, Vt = torch.linalg.svd(self.W, full_matrices=True)
-            self.U = U
-            self.S = S
-            self.Vt = Vt
+            U, S, Vt = torch.linalg.svd(self.layer.weight, full_matrices=True)
+            self.U = U.detach()
+            self.S = S.detach()
+            self.Vt = Vt.detach()
+            # print(S)
             # print(U.shape, S.shape, Vt.shape)
 
-    def scale_sorted_chunk_inplace(self, S, scales=None):
+    def scale_sorted_chunk_inplace(self, S, alpha=None, beta=None):
     
-        # Sort indices only (values not needed)
-        _, ind = torch.sort(S)
         ind = torch.arange(S.shape[0], device=S.device)
-        S_scaled = S
+        S_scaled = S.clone().to(alpha.device)
+        # print(S_scaled.shape)
         # Chunk indices
-        chunks = torch.chunk(ind, len(scales))
-        for i in range(len(scales)):
-            # print(S_scaled.shape,chunks[i].shape )
-            # Scale selected chunk IN-PLACE
-            S_scaled[chunks[i]] *= scales[i]
+        sizes = [len(ind) // len(alpha) + (1 if i < len(ind) % len(alpha) else 0) for i in range(len(alpha)) ]
+        chunks = torch.split(ind, sizes)
+        if beta==None:
+            for i in range(len(alpha)):
+                S_scaled[chunks[i]] =  S_scaled[chunks[i]]*alpha[i] 
+        else:
+            for i in range(len(alpha)):
+                S_scaled[chunks[i]] =  S_scaled[chunks[i]]*alpha[i] +beta[i]
         return S_scaled
 
     
 
-    def reconstructed_weight(self, S=None, scales=None):
+    def reconstructed_weight(self, alpha=None, beta=None):
+        if alpha==None or (alpha==1).all().item():
+            return self.layer.weight
+        
         """Reconstruct masked weight"""
-        if scales!=None:
-            S = self.scale_sorted_chunk_inplace(self.S, scales=scales)
-        m,n = self.W.shape
-        Sigma = torch.zeros((m, n), device=self.W.device, dtype=self.W.dtype)
+        # if S==None:
+        S = self.scale_sorted_chunk_inplace(self.S, alpha=alpha, beta=beta)
+        m,n = self.layer.weight.shape
+        Sigma = torch.zeros((m, n), device=self.layer.weight.device, dtype=self.layer.weight.dtype)
         Sigma[:min(m, n), :min(m, n)] = torch.diag(S)
+        self.U = self.U.to(Sigma.device)
+        self.Vt = self.Vt.to(Sigma.device)
+        # print(self.U.device , Sigma.device , self.Vt.device)
         return self.U @ Sigma @ self.Vt
 
-    def forward(self, x, scales):
-        # print(self.S.shape, scales.shape)
-        S = self.scale_sorted_chunk_inplace(self.S, scales=scales)
-        W_rec = self.reconstructed_weight(S)
-        self.layer.weight.data = W_rec
-        return self.layer(x)
-
-def generate_ncr_gpu(n, r, lamda=1.0, device="cpu"):
-    
-    # Generate all combinations of positions for zeros
-    zero_positions_list = list(combinations(range(n), r))
-    num_combinations = len(zero_positions_list)
-    
-    # Initialize tensor with ones (scaled by lamda)
-    S1_tensor = torch.full((num_combinations, n), 1.0, device=device, dtype=torch.float32)
-    
-    # Set zeros in the appropriate positions
-    for idx, zero_positions in enumerate(zero_positions_list):
-        S1_tensor[idx, list(zero_positions)] = lamda
-    
-    return S1_tensor
-
+    def forward(self, x, alpha=None,beta=None):
+        # print(self.S.shape, alpha.shape)
+        
+        W_rec = self.reconstructed_weight( alpha=alpha,beta=beta)
+       
+        return  F.linear(x, W_rec, self.layer.bias.detach())
 
 
 class SparsityAwareRouter(nn.Module):
@@ -214,12 +196,13 @@ class SparsityAwareRouter(nn.Module):
     Key innovation: Routes to experts with highest expected sparsity
     using Gaussian approximation of pre-activations.
     """
-    def __init__(self, in_features: int, n_experts: int, top_k: int, comb):
+    def __init__(self, in_features: int, n_experts: int, top_k: int, alpha, beta):
         super().__init__()
         self.n_experts = n_experts
         self.top_k = top_k
         self.in_features = in_features
-        self.comb = comb
+        self.alpha = alpha
+        self.beta = beta
         
     def compute_expert_statistics(self, x: torch.Tensor, W=None, bias=None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -252,7 +235,7 @@ class SparsityAwareRouter(nn.Module):
         return mu_h, sigma_h
     
     def forward(self, x: torch.Tensor, expert: nn.ModuleList, 
-                training: bool = True) -> Tuple[torch.Tensor, torch.Tensor]:
+                is_training: bool = True) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Route inputs to top-k sparsest experts.
         
@@ -268,9 +251,9 @@ class SparsityAwareRouter(nn.Module):
         
         # Compute sparsity scores for each expert
         sparsity_scores = []
-        for S in self.comb:
-            W = expert.reconstructed_weight(scales=S)
-            mu_h, sigma_h = self.compute_expert_statistics(x,W,expert.bias)
+        for alpha, beta in zip(self.alpha, self.beta):
+            W = expert.reconstructed_weight(alpha=alpha,beta=beta)
+            mu_h, sigma_h = self.compute_expert_statistics(x,W,expert.layer.bias)
             
             # Approximate Φ(μ_h / σ_h) using erf
             # Lower score = sparser activation (fewer positive values)
@@ -305,24 +288,32 @@ class MoEXLayer(nn.Module):
     2. Routing via sparsity prediction
     3. Combining expert outputs with learned weights
     """
-    def __init__(self, expert: nn.ModuleList, top_k: int, n=8, r=2, lamda=1.0):
+    def __init__(self, expert: nn.ModuleList, top_k: int,  device=None):
         super().__init__()
 
 
         self.expert = expert
+        self.device = device or self.expert.layer.weight.device
         self.top_k = top_k
-        self.comb = generate_ncr_gpu(n, r, lamda=lamda, device="cpu")
-        self.n_experts = len(self.comb)
+        self.alpha = nn.ParameterList([nn.Parameter(torch.ones(min(self.expert.layer.weight.shape)).to(self.device))] )
+        self.beta = nn.ParameterList([nn.Parameter(torch.zeros(min(self.expert.layer.weight.shape)).to(self.device))] )
+        
+        self.n_experts = len(self.alpha)
+        self.is_training = True
 
-        self.in_features = expert.in_features
+        self.in_features = self.expert.layer.in_features
         # global self.load_balancing
         self.load_balancing = {}
         self.router = SparsityAwareRouter(
             in_features=self.in_features,
             n_experts=self.n_experts,
             top_k=top_k,
-            comb=self.comb
+            alpha=self.alpha,
+            beta=self.beta
         )
+    def add_alpha(self,n=1, n_params=8):
+        self.alpha += nn.ParameterList([nn.Parameter(nn.Linear(1,min(self.expert.layer.weight.shape) ).weight.squeeze().to(self.device)) for i in range(n)] ) 
+        self.beta += nn.ParameterList([nn.Parameter(nn.Linear(1,min(self.expert.layer.weight.shape) ).weight.squeeze().to(self.device)) for i in range(n)] ) 
         
     def compute_load_balance_loss(self, router_probs: torch.Tensor) -> torch.Tensor:
         """
@@ -347,98 +338,105 @@ class MoEXLayer(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-        return_aux: bool = True
+        return_aux: bool = True,
     ) -> Tuple[torch.Tensor, Optional[dict]]:
         """
         Args:
             x: [batch, seq, in_features]
         Returns:
             output: [batch, seq, in_features]
-            aux_info: routing diagnostics
+            aux_info: routing alphagnostics
         """
-
         B, S, D = x.shape
-
-        # ---------- Routing ----------
-        router_weights, router_logits = self.router(
-            x, self.expert, self.training
-        )
-
-        # top-k per token
-        topk_vals, topk_idx = torch.topk(
-            router_logits, self.top_k, dim=-1
-        )
-        topk_weights = F.softmax(topk_vals, dim=-1)
-
-        # ---------- Prepare flattened views ----------
-        x_flat = x.view(-1, D)                       # [B*S, D]
-        output = torch.zeros(
-            *x.shape[:-1],
-            self.expert.W.shape[0],
-            device=x.device,
-            dtype=x.dtype
-        )
-        output_flat = output.view(-1, self.expert.W.shape[0])
-
-        topk_idx_flat = topk_idx.view(-1, self.top_k)
-        topk_w_flat = topk_weights.view(-1, self.top_k)
-
-        expert_activations = [None] * self.n_experts
-        active_experts = []
-        # print(router_logits.shape,topk_vals.shape)
-        # print(topk_idx_flat)
-        # ---------- Token → Expert Dispatch ----------
-        global aux_info
-        self.load_balancing =  aux_info.get("load_balancing", {})
-        # print(aux_info.get("load_balancing", {}))
-        for expert_id in range(self.n_experts):
-            mask = topk_idx_flat == expert_id        # [B*S, K]
-            # print("----------",expert_id,mask)
-            if not mask.any():
-                continue
-
-            active_experts.append(expert_id)
-
-            token_ids, k_ids = mask.nonzero(as_tuple=True)
-
-            tokens = x_flat[token_ids]               # [N, D]
-            weights = topk_w_flat[token_ids, k_ids].unsqueeze(-1)
-            
-            # print(expert_id,  token_ids)
-            if expert_id  in self.load_balancing:
-                self.load_balancing[expert_id] += len(token_ids)
-            else:
-                self.load_balancing[expert_id] = len(token_ids)
-            # expert forward ONLY on routed tokens
-            expert_out = self.expert(tokens.unsqueeze(1), self.comb[expert_id])
-            expert_out = expert_out.squeeze(1)
-            # print(weights.shape, expert_out.shape, output.shape, output_flat.shape)
-            # weighted accumulation
-            output_flat.index_add_(
-                0, token_ids, expert_out * weights
+        # print(self.is_training)
+        # print(hugfghj)
+        if not self.is_training:
+            # print("---------MoE-X in eval mode-------------", self.is_training)
+            # ---------- Routing ----------
+            router_weights, router_logits = self.router(
+                x, self.expert, self.is_training
             )
+    
+            # top-k per token
+            topk_vals, topk_idx = torch.topk(
+                router_logits, self.top_k, dim=-1
+            )
+            topk_weights = F.softmax(topk_vals, dim=-1)
 
-           
+            # ---------- Prepare flattened views ----------
+            x_flat = x.view(-1, D)                       # [B*S, D]
+            output = torch.zeros(
+                *x.shape[:-1],
+                self.expert.layer.weight.shape[0],
+                device=x.device,
+                dtype=x.dtype
+            )
+            output_flat = output.view(-1, self.expert.layer.weight.shape[0])
+    
+            topk_idx_flat = topk_idx.view(-1, self.top_k)
+            topk_w_flat = topk_weights.view(-1, self.top_k)
+    
+            expert_activations = [None] * self.n_experts
+            active_experts = []
+            # print(router_logits.shape,topk_vals.shape)
+            # print(topk_idx_flat)
+            # ---------- Token → Expert Dispatch ----------
+            global aux_info
+            self.load_balancing =  aux_info.get("load_balancing", {})
+            # print(aux_info.get("load_balancing", {}))
+            for expert_id in range(self.n_experts):
+                mask = topk_idx_flat == expert_id        # [B*S, K]
+                # print("----------",expert_id,mask)
+                if not mask.any():
+                    continue
+    
+                active_experts.append(expert_id)
+    
+                token_ids, k_ids = mask.nonzero(as_tuple=True)
+    
+                tokens = x_flat[token_ids]               # [N, D]
+                weights = topk_w_flat[token_ids, k_ids].unsqueeze(-1)
+                
+                # print(expert_id,  token_ids)
+                if expert_id  in self.load_balancing:
+                    self.load_balancing[expert_id] += len(token_ids)
+                else:
+                    self.load_balancing[expert_id] = len(token_ids)
+                # expert forward ONLY on routed tokens
+                expert_out = self.expert(tokens.unsqueeze(1), self.alpha[expert_id])
+                expert_out = expert_out.squeeze(1)
+                # print(weights.shape, expert_out.shape, output.shape, output_flat.shape)
+                # weighted accumulation
+                output_flat.index_add_(
+                    0, token_ids, expert_out * weights
+                )
+    
+            # print(self.load_balancing)
+    
+            # ---------- Auxiliary Info ----------
+            # print("-----------MOE-X------------------")
+            
+            if return_aux:
+                load_balance_loss = self.compute_load_balance_loss(router_weights)
+    
+               
+    
+                aux_info = {
+                    "router_weights": router_weights,
+                    "router_logits": router_logits,
+                    "load_balance_loss": aux_info.get("load_balance_loss", 0.0)+load_balance_loss,
+                    "active_experts": torch.tensor(active_experts, device=x.device),
+                    "load_balancing": self.load_balancing,
+                    # "load_balancing": {k: load_balancing.get(k, 0) + aux_info.get("load_balancing", {}).get(k, 0) for k in load_balancing.keys() | aux_info.get("load_balancing", {}).keys()}
+                }
+    
+            return output#, aux_info
 
-        # ---------- Auxiliary Info ----------
-        # print("-----------MOE-X------------------")
-        
-        if return_aux:
-            load_balance_loss = self.compute_load_balance_loss(router_weights)
-
-           
-
-            aux_info = {
-                "router_weights": router_weights,
-                "router_logits": router_logits,
-                "load_balance_loss": aux_info.get("load_balance_loss", 0.0)+load_balance_loss,
-                "active_experts": torch.tensor(active_experts, device=x.device),
-                "load_balancing": self.load_balancing,
-                # "load_balancing": {k: load_balancing.get(k, 0) + aux_info.get("load_balancing", {}).get(k, 0) for k in load_balancing.keys() | aux_info.get("load_balancing", {}).keys()}
-            }
-
-        return output#, aux_info
-
+        else:
+            # print("---------MoE-X in train mode-------------", self.is_training)
+            task_id = int(os.environ.get("alpha_ID", None))
+            
+            return self.expert(x, self.alpha[task_id], self.beta[task_id])
 
 
 if __name__ == "__main__":
