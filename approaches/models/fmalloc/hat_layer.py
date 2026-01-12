@@ -311,6 +311,8 @@ class MoEXLayer(nn.Module):
             alpha=self.alpha,
             beta=self.beta
         )
+
+        self.task_id = int(os.environ.get("alpha_ID", None))
     def add_alpha(self,n=1, n_params=8):
         self.alpha += nn.ParameterList([nn.Parameter(nn.Linear(1,min(self.expert.layer.weight.shape) ).weight.squeeze().to(self.device)) for i in range(n)] ) 
         self.beta += nn.ParameterList([nn.Parameter(nn.Linear(1,min(self.expert.layer.weight.shape) ).weight.squeeze().to(self.device)) for i in range(n)] ) 
@@ -434,9 +436,9 @@ class MoEXLayer(nn.Module):
 
         else:
             # print("---------MoE-X in train mode-------------", self.is_training)
-            task_id = int(os.environ.get("alpha_ID", None))
             
-            return self.expert(x, self.alpha[task_id], self.beta[task_id])
+            
+            return self.expert(x, self.alpha[self.task_id], self.beta[self.task_id])
 
 
 if __name__ == "__main__":
