@@ -494,26 +494,14 @@ def load_model_ensemble_and_task(
                 task_id =  int(os.environ.get("alpha_ID", None))
                 
                 print("-------------check-point-model-dense-to-moe------------", task_id)
-                # print(model.encoder.layers[0].fc1, model.encoder.layers[0].fc2)
-                # print(model.cfg.dl, model.cfg.scale)
-                # for layer in model.encoder.layers[:]:
-                #     layer.fc1 = MoEXLayer(SVDMaskLinear(layer.fc1), top_k=1,  device=layer.fc2.weight.device)
-                #     layer.fc2 = MoEXLayer(SVDMaskLinear(layer.fc2), top_k=1,  device=layer.fc2.weight.device)
-                #     layer.fc1.add_alpha(n=5)
-                #     layer.fc2.add_alpha(n=5)
-                #     layer.fc1.is_training = is_training
-                #     layer.fc2.is_training = is_training
-                    
-                # for layer in model.decoder.layers[:]:
-                #     layer.fc1 = MoEXLayer(SVDMaskLinear(layer.fc1), top_k=1,  device=layer.fc2.weight.device)
-                #     layer.fc2 = MoEXLayer(SVDMaskLinear(layer.fc2), top_k=1,  device=layer.fc2.weight.device)
-                #     layer.fc1.add_alpha(n=5)
-                #     layer.fc2.add_alpha(n=5)
-                #     layer.fc1.is_training = is_training
-                #     layer.fc2.is_training = is_training
+                
 
-                moelayers1 = torch.nn.ModuleList()
-                moelayers2 = torch.nn.ModuleList()
+                encoder_fc1_experts = [torch.nn.ModuleList() for _ in range(len(model.encoder.layers))]
+                encoder_fc2_experts = [torch.nn.ModuleList() for _ in range(len(model.encoder.layers))]
+
+                decoder_fc1_experts = [torch.nn.ModuleList() for _ in range(len(model.decoder.layers))]
+                decoder_fc2_experts = [torch.nn.ModuleList() for _ in range(len(model.decoder.layers))]
+                
                 for i in range(6):
                     file = f"{filename.split('.')[0][:-1]}{i}.pt"
                     # print("-----file:", file)
@@ -521,23 +509,39 @@ def load_model_ensemble_and_task(
                     model.load_state_dict(
                         state1["model"], strict=strict, model_cfg=cfg.model
                     )
-                    moelayers1.append(copy.deepcopy(model.encoder.layers[1].fc1))
-                    moelayers2.append(copy.deepcopy(model.encoder.layers[1].fc2))
-                    # print("--layer",model.decoder.output_projection.weight)
-                    # print("moelayers:", moelayers[-1].weight.shape)
+                    
+                    # collect encoder experts
+                    for layer_id, layer in enumerate(model.encoder.layers):
+                        encoder_fc1_experts[layer_id].append(copy.deepcopy(layer.fc1))
+                        encoder_fc2_experts[layer_id].append(copy.deepcopy(layer.fc2))
+
+                    # collect decoder experts
+                    for layer_id, layer in enumerate(model.decoder.layers):
+                        decoder_fc1_experts[layer_id].append(copy.deepcopy(layer.fc1))
+                        decoder_fc2_experts[layer_id].append(copy.deepcopy(layer.fc2))
 
                 model.load_state_dict(
                         state["model"], strict=strict, model_cfg=cfg.model
                     )
 
                 print("-------------check-point-model-dense-to-moe-end--------", is_training)
-                print("model.encoder.layers[1]")
-                # for exc in moelayers[:]:
-                #     print(exc.weight)
-                model.encoder.layers[1].fc1 = MoEXLayer(moelayers1[:],  top_k=1)
-                model.encoder.layers[1].fc2 = MoEXLayer(moelayers2[:],  top_k=1)
-                model.encoder.layers[1].fc1.is_training = is_training
-                model.encoder.layers[1].fc2.is_training = is_training
+                print("model.encoder.decoder_all")
+                # model.encoder.layers[1].fc1 = MoEXLayer(encoder_fc1_experts[1],  top_k=1)
+                # model.encoder.layers[1].fc2 = MoEXLayer(encoder_fc2_experts[1],  top_k=1)
+                # model.encoder.layers[1].fc1.is_training = is_training
+                # model.encoder.layers[1].fc2.is_training = is_training
+                for layer_id in range(len(model.encoder.layers)): #(1,2):
+                    model.encoder.layers[layer_id].fc1 = MoEXLayer(encoder_fc1_experts[layer_id], top_k=1)
+                    model.encoder.layers[layer_id].fc2 = MoEXLayer(encoder_fc2_experts[layer_id], top_k=1)
+                    model.encoder.layers[layer_id].fc1.is_training = is_training
+                    model.encoder.layers[layer_id].fc2.is_training = is_training
+
+                for layer_id in range(len(model.decoder.layers)): 
+                    model.decoder.layers[layer_id].fc1 = MoEXLayer(decoder_fc1_experts[layer_id], top_k=1)
+                    model.decoder.layers[layer_id].fc2 = MoEXLayer(decoder_fc2_experts[layer_id], top_k=1)
+                    model.decoder.layers[layer_id].fc1.is_training = is_training
+                    model.decoder.layers[layer_id].fc2.is_training = is_training
+                
 
             # reset state so it gets loaded for the next model in ensemble
             state = None
