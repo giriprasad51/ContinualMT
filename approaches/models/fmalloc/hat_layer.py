@@ -116,8 +116,6 @@ def negative_embedding(num_embeddings, embedding_dim):
         
     return m
 
-
-
 class SVDMaskLinear(nn.Module):
     def __init__(
         self,
@@ -140,17 +138,19 @@ class SVDMaskLinear(nn.Module):
     def compute_svd(self):
         """Compute SVD of the weight matrix"""
         with torch.no_grad():
-            U, S, Vt = torch.linalg.svd(self.layer.weight, full_matrices=True)
-            self.U = U.detach()
-            self.S = S.detach()
-            self.Vt = Vt.detach()
+            U, S, Vt = torch.linalg.svd(self.layer.weight, full_matrices=False)
+            
+
+            self.register_buffer("U", U.detach())
+            self.register_buffer("S", S.detach())
+            self.register_buffer("Vt", Vt.detach())
             # print(S)
             # print(U.shape, S.shape, Vt.shape)
 
     def scale_sorted_chunk_inplace(self, S, alpha=None, beta=None):
     
         ind = torch.arange(S.shape[0], device=S.device)
-        S_scaled = S.clone().to(alpha.device)
+        S_scaled = S.clone()
         # print(S_scaled.shape)
         # Chunk indices
         sizes = [len(ind) // len(alpha) + (1 if i < len(ind) % len(alpha) else 0) for i in range(len(alpha)) ]
@@ -166,26 +166,22 @@ class SVDMaskLinear(nn.Module):
     
 
     def reconstructed_weight(self, alpha=None, beta=None):
-        if alpha==None or (alpha==1).all().item():
+        if alpha==None or torch.all(alpha == 1):
             return self.layer.weight
         
         """Reconstruct masked weight"""
         # if S==None:
         S = self.scale_sorted_chunk_inplace(self.S, alpha=alpha, beta=beta)
-        m,n = self.layer.weight.shape
-        Sigma = torch.zeros((m, n), device=self.layer.weight.device, dtype=self.layer.weight.dtype)
-        Sigma[:min(m, n), :min(m, n)] = torch.diag(S)
-        self.U = self.U.to(Sigma.device)
-        self.Vt = self.Vt.to(Sigma.device)
+      
+
         # print(self.U.device , Sigma.device , self.Vt.device)
-        return self.U @ Sigma @ self.Vt
+        return  torch.mm(self.U * S, self.Vt)
 
     def forward(self, x, alpha=None,beta=None):
         # print(self.S.shape, alpha.shape)
+        W_eff = self.reconstructed_weight( alpha=alpha,beta=beta)
         
-        W_rec = self.reconstructed_weight( alpha=alpha,beta=beta)
-       
-        return  F.linear(x, W_rec, self.layer.bias.detach())
+        return  F.linear(x, W_eff, self.layer.bias)
 
 
 class SparsityAwareRouter(nn.Module):
@@ -196,13 +192,12 @@ class SparsityAwareRouter(nn.Module):
     Key innovation: Routes to experts with highest expected sparsity
     using Gaussian approximation of pre-activations.
     """
-    def __init__(self, in_features: int, n_experts: int, top_k: int, alpha, beta):
+    def __init__(self, experts: nn.ModuleList,  top_k: int,):
         super().__init__()
-        self.n_experts = n_experts
+        self.n_experts = len(experts)
         self.top_k = top_k
-        self.in_features = in_features
-        self.alpha = alpha
-        self.beta = beta
+        self.experts = experts
+        
         
     def compute_expert_statistics(self, x: torch.Tensor, W=None, bias=None) -> Tuple[torch.Tensor, torch.Tensor]:
         """
@@ -225,7 +220,7 @@ class SparsityAwareRouter(nn.Module):
         
         # Compute μ_h = μ^T x + b_mean
         # print(x.shape, mu_weights.shape,bias.mean().shape)
-        mu_h = torch.matmul(x, mu_weights) + bias.mean()  # [batch, seq_len]
+        mu_h = torch.matmul(x, mu_weights) + bias.mean() if bias is not None else torch.matmul(x, mu_weights)  # [batch, seq_len]
         
         # Compute σ_h = sqrt(σ^T (x^2))
         x_squared = x ** 2
@@ -234,7 +229,7 @@ class SparsityAwareRouter(nn.Module):
         
         return mu_h, sigma_h
     
-    def forward(self, x: torch.Tensor, expert: nn.ModuleList, 
+    def forward(self, x: torch.Tensor,  
                 is_training: bool = True) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Route inputs to top-k sparsest experts.
@@ -251,9 +246,9 @@ class SparsityAwareRouter(nn.Module):
         
         # Compute sparsity scores for each expert
         sparsity_scores = []
-        for alpha, beta in zip(self.alpha, self.beta):
-            W = expert.reconstructed_weight(alpha=alpha,beta=beta)
-            mu_h, sigma_h = self.compute_expert_statistics(x,W,expert.layer.bias)
+        for expert in self.experts:
+            W = expert.weight
+            mu_h, sigma_h = self.compute_expert_statistics(x,W,expert.bias)
             
             # Approximate Φ(μ_h / σ_h) using erf
             # Lower score = sparser activation (fewer positive values)
@@ -288,35 +283,31 @@ class MoEXLayer(nn.Module):
     2. Routing via sparsity prediction
     3. Combining expert outputs with learned weights
     """
-    def __init__(self, expert: nn.ModuleList, top_k: int,  device=None):
+    def __init__(self, experts: nn.ModuleList, top_k: int,  device=None):
         super().__init__()
 
 
-        self.expert = expert
-        self.device = device or self.expert.layer.weight.device
+        self.experts = experts
+        self.device = device or self.experts[0].weight.device
         self.top_k = top_k
-        self.alpha = nn.ParameterList([nn.Parameter(torch.ones(min(self.expert.layer.weight.shape)).to(self.device))] )
-        self.beta = nn.ParameterList([nn.Parameter(torch.zeros(min(self.expert.layer.weight.shape)).to(self.device))] )
+       
         
-        self.n_experts = len(self.alpha)
+        self.n_experts = len(experts)
         self.is_training = True
 
-        self.in_features = self.expert.layer.in_features
         # global self.load_balancing
         self.load_balancing = {}
         self.router = SparsityAwareRouter(
-            in_features=self.in_features,
-            n_experts=self.n_experts,
+            self.experts,
             top_k=top_k,
-            alpha=self.alpha,
-            beta=self.beta
+           
         )
 
         self.task_id = int(os.environ.get("alpha_ID", None))
-    def add_alpha(self,n=1, n_params=8):
-        self.alpha += nn.ParameterList([nn.Parameter(nn.Linear(1,min(self.expert.layer.weight.shape) ).weight.squeeze().to(self.device)) for i in range(n)] ) 
-        self.beta += nn.ParameterList([nn.Parameter(nn.Linear(1,min(self.expert.layer.weight.shape) ).weight.squeeze().to(self.device)) for i in range(n)] ) 
-        
+        # for expert in self.experts:
+        #     print(expert.weight)
+        # print(name_err)
+    
     def compute_load_balance_loss(self, router_probs: torch.Tensor) -> torch.Tensor:
         """
         Compute auxiliary loss to encourage balanced expert usage.
@@ -356,7 +347,7 @@ class MoEXLayer(nn.Module):
             # print("---------MoE-X in eval mode-------------", self.is_training)
             # ---------- Routing ----------
             router_weights, router_logits = self.router(
-                x, self.expert, self.is_training
+                x, self.experts
             )
     
             # top-k per token
@@ -369,11 +360,11 @@ class MoEXLayer(nn.Module):
             x_flat = x.view(-1, D)                       # [B*S, D]
             output = torch.zeros(
                 *x.shape[:-1],
-                self.expert.layer.weight.shape[0],
+                self.experts[0].weight.shape[0],
                 device=x.device,
                 dtype=x.dtype
             )
-            output_flat = output.view(-1, self.expert.layer.weight.shape[0])
+            output_flat = output.view(-1, self.experts[0].weight.shape[0])
     
             topk_idx_flat = topk_idx.view(-1, self.top_k)
             topk_w_flat = topk_weights.view(-1, self.top_k)
@@ -405,7 +396,7 @@ class MoEXLayer(nn.Module):
                 else:
                     self.load_balancing[expert_id] = len(token_ids)
                 # expert forward ONLY on routed tokens
-                expert_out = self.expert(tokens.unsqueeze(1), self.alpha[expert_id])
+                expert_out = self.experts[expert_id](tokens.unsqueeze(1))
                 expert_out = expert_out.squeeze(1)
                 # print(weights.shape, expert_out.shape, output.shape, output_flat.shape)
                 # weighted accumulation
@@ -438,7 +429,13 @@ class MoEXLayer(nn.Module):
             # print("---------MoE-X in train mode-------------", self.is_training)
             
             
-            return self.expert(x, self.alpha[self.task_id], self.beta[self.task_id])
+            return  self.experts[self.task_id](x)
+
+        
+
+
+
+
 
 
 if __name__ == "__main__":
