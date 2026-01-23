@@ -15,6 +15,7 @@ import traceback
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
+import copy
 
 import numpy as np
 import torch
@@ -28,6 +29,8 @@ from fairseq.distributed.fully_sharded_data_parallel import FSDP, has_FSDP
 from fairseq.file_io import PathManager
 from fairseq.models import FairseqDecoder, FairseqEncoder
 from omegaconf import DictConfig, OmegaConf, open_dict
+from approaches.models.fmalloc.hat_layer import MoEXLayer, SVDMaskLinear
+from approaches.models.fmalloc import hat_layer
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +110,9 @@ def save_checkpoint(cfg: CheckpointConfig, trainer, epoch_itr, val_loss):
     extra_state = {"train_iterator": epoch_itr.state_dict(), "val_loss": val_loss}
     if hasattr(save_checkpoint, "best"):
         extra_state.update({"best": save_checkpoint.best})
+
+    # print("------------check-point-2-save----------------------")
+    # print("extra_state:", extra_state)
 
     checkpoints = [
         os.path.join(cfg.save_dir, fn) for fn, cond in checkpoint_conds.items() if cond
@@ -312,7 +318,10 @@ def load_checkpoint_to_cpu(path, arg_overrides=None, load_on_all_ranks=False):
         local_path = PathManager.get_local_path(path)
 
     with open(local_path, "rb") as f:
-        state = torch.load(f, map_location=torch.device("cpu"))
+        # state = torch.load(f, map_location=torch.device("cpu"))
+        # print("------------check-point-1-checkpoint----------------------")
+        state = torch.load(f, map_location=torch.device("cpu"), weights_only=False)
+
 
     if "args" in state and state["args"] is not None and arg_overrides is not None:
         args = state["args"]
@@ -352,6 +361,7 @@ def load_model_ensemble(
     suffix="",
     num_shards=1,
     state=None,
+    is_training=True,
 ):
     """Loads an ensemble of models.
 
@@ -372,6 +382,7 @@ def load_model_ensemble(
         suffix,
         num_shards,
         state,
+        is_training=is_training,
     )
     return ensemble, args
 
@@ -399,6 +410,7 @@ def load_model_ensemble_and_task(
     suffix="",
     num_shards=1,
     state=None,
+    is_training=True,
 ):
     assert state is None or len(filenames) == 1
 
@@ -479,9 +491,53 @@ def load_model_ensemble_and_task(
                     and "num_updates" in state["optimizer_history"][-1]
                 ):
                     model.set_num_updates(state["optimizer_history"][-1]["num_updates"])
+                task_id =  int(os.environ.get("alpha_ID", None))
+                
+                print("-------------check-point-model-dense-to-moe------------", task_id)
+                # print(model.encoder.layers[0].fc1, model.encoder.layers[0].fc2)
+                # print(model.cfg.dl, model.cfg.scale)
+                # for layer in model.encoder.layers[:]:
+                #     layer.fc1 = MoEXLayer(SVDMaskLinear(layer.fc1), top_k=1,  device=layer.fc2.weight.device)
+                #     layer.fc2 = MoEXLayer(SVDMaskLinear(layer.fc2), top_k=1,  device=layer.fc2.weight.device)
+                #     layer.fc1.add_alpha(n=5)
+                #     layer.fc2.add_alpha(n=5)
+                #     layer.fc1.is_training = is_training
+                #     layer.fc2.is_training = is_training
+                    
+                # for layer in model.decoder.layers[:]:
+                #     layer.fc1 = MoEXLayer(SVDMaskLinear(layer.fc1), top_k=1,  device=layer.fc2.weight.device)
+                #     layer.fc2 = MoEXLayer(SVDMaskLinear(layer.fc2), top_k=1,  device=layer.fc2.weight.device)
+                #     layer.fc1.add_alpha(n=5)
+                #     layer.fc2.add_alpha(n=5)
+                #     layer.fc1.is_training = is_training
+                #     layer.fc2.is_training = is_training
+
+                moelayers1 = torch.nn.ModuleList()
+                moelayers2 = torch.nn.ModuleList()
+                for i in range(6):
+                    file = f"{filename.split('.')[0][:-1]}{i}.pt"
+                    # print("-----file:", file)
+                    state1 = load_checkpoint_to_cpu(file, arg_overrides)
+                    model.load_state_dict(
+                        state1["model"], strict=strict, model_cfg=cfg.model
+                    )
+                    moelayers1.append(copy.deepcopy(model.encoder.layers[1].fc1))
+                    moelayers2.append(copy.deepcopy(model.encoder.layers[1].fc2))
+                    # print("--layer",model.decoder.output_projection.weight)
+                    # print("moelayers:", moelayers[-1].weight.shape)
+
                 model.load_state_dict(
-                    state["model"], strict=strict, model_cfg=cfg.model
-                )
+                        state["model"], strict=strict, model_cfg=cfg.model
+                    )
+
+                print("-------------check-point-model-dense-to-moe-end--------", is_training)
+                print("model.encoder.layers[1]")
+                # for exc in moelayers[:]:
+                #     print(exc.weight)
+                model.encoder.layers[1].fc1 = MoEXLayer(moelayers1[:],  top_k=1)
+                model.encoder.layers[1].fc2 = MoEXLayer(moelayers2[:],  top_k=1)
+                model.encoder.layers[1].fc1.is_training = is_training
+                model.encoder.layers[1].fc2.is_training = is_training
 
             # reset state so it gets loaded for the next model in ensemble
             state = None
